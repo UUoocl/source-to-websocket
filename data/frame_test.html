@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>MediaPipe Frame Debugger</title>
+    <style>
+        :root {
+            --bg: #1e1e2e;
+            --surface: #313244;
+            --text: #cdd6f4;
+            --accent: #89b4fa;
+            --green: #a6e3a1;
+        }
+
+        body {
+            background: var(--bg);
+            color: var(--text);
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            margin: 0;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        .container {
+            background: var(--surface);
+            padding: 20px;
+            border-radius: 15px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+            border: 1px solid rgba(255,255,255,0.1);
+            max-width: 90vw;
+        }
+
+        #frame-display {
+            width: 512px;
+            height: auto;
+            min-height: 256px;
+            background: #000;
+            border-radius: 8px;
+            display: block;
+            border: 2px solid var(--accent);
+        }
+
+        .info {
+            margin-top: 20px;
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+            font-family: monospace;
+        }
+
+        .label { color: var(--accent); }
+        .value { color: var(--green); }
+
+        .status {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            padding: 8px 15px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: bold;
+            background: rgba(255,255,255,0.05);
+        }
+    </style>
+</head>
+<body>
+    <div id="status" class="status">Connecting...</div>
+
+    <div class="container">
+        <h2 style="margin-top:0; color: var(--accent);">Frame Debugger</h2>
+        <img id="frame-display" alt="Waiting for frame..." />
+        
+        <div class="info">
+            <div><span class="label">Task Type:</span> <span id="type-val" class="value">-</span></div>
+            <div><span class="label">Data Size:</span> <span id="size-val" class="value">0 KB</span></div>
+            <div><span class="label">Latency:</span> <span id="lat-val" class="value">0 ms</span></div>
+            <div><span class="label">WS Port:</span> <span id="port-val" class="value">-</span></div>
+        </div>
+    </div>
+
+    <script>
+        const img = document.getElementById('frame-display');
+        const typeVal = document.getElementById('type-val');
+        const sizeVal = document.getElementById('size-val');
+        const latVal = document.getElementById('lat-val');
+        const portVal = document.getElementById('port-val');
+        const status = document.getElementById('status');
+
+        let lastTime = performance.now();
+
+        async function connect() {
+            const ports = [4466, 4477, 12348, 8089];
+            let wsPort = null;
+
+            for (const port of ports) {
+                try {
+                    const res = await fetch(`http://127.0.0.1:${port}/__lws/ws_port`);
+                    if (res.ok) {
+                        wsPort = (await res.text()).trim();
+                        break;
+                    }
+                } catch (e) {}
+            }
+
+            if (wsPort) {
+                const ws = new WebSocket(`ws://127.0.0.1:${wsPort}/ws`);
+                ws.onopen = () => {
+                    status.textContent = "CONNECTED";
+                    status.style.color = "#a6e3a1";
+                    portVal.textContent = wsPort;
+                };
+                ws.onmessage = (e) => {
+                    const data = JSON.parse(e.data);
+                    if (data.t === 'frame') {
+                        const now = performance.now();
+                        latVal.textContent = `${Math.round(now - lastTime)} ms`;
+                        lastTime = now;
+
+                        typeVal.textContent = data.type;
+                        sizeVal.textContent = `${Math.round(data.v.length / 1024)} KB`;
+                        img.src = "data:image/jpeg;base64," + data.v;
+                    }
+                };
+                ws.onclose = () => {
+                    status.textContent = "DISCONNECTED";
+                    status.style.color = "#f38ba8";
+                    setTimeout(connect, 2000);
+                };
+            } else {
+                status.textContent = "SEARCHING...";
+                setTimeout(connect, 2000);
+            }
+        }
+
+        connect();
+    </script>
+</body>
+</html>

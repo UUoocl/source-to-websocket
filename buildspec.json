@@ -1,0 +1,39 @@
+{
+    "dependencies": {
+        "obs-studio": {
+            "version": "31.1.0",
+            "baseUrl": "https://github.com/obsproject/obs-studio/archive/refs/tags",
+            "label": "OBS sources",
+            "hashes": {
+                "macos": "ba903f3848cfabd9ea1205aea14b69e83a2eb43ad6f3f7cc80a6a900bce0e56e"
+            }
+        },
+        "prebuilt": {
+            "version": "2025-08-23",
+            "baseUrl": "https://github.com/obsproject/obs-deps/releases/download",
+            "label": "Pre-Built obs-deps",
+            "hashes": {
+                "macos": "9403bb43fb0a9bb215739a5659ca274fe884dbbbcd22bd9ca781c961fb041c42"
+            }
+        },
+        "qt6": {
+            "version": "2025-08-23",
+            "baseUrl": "https://github.com/obsproject/obs-deps/releases/download",
+            "label": "Pre-Built Qt6",
+            "hashes": {
+                "macos": "990f11638b80a4509e14e8c315f6e4caa0861e37fcd3113a256fbff835ffca29"
+            }
+        }
+    },
+    "platformConfig": {
+        "macos": {
+            "bundleId": "com.source-to-websocket"
+        }
+    },
+    "name": "source-to-websocket",
+    "displayName": "Source to WebSocket",
+    "version": "1.0.0",
+    "author": "Jon Wood",
+    "website": "https://github.com/jonwood/mediaWarp",
+    "email": "jon@example.com"
+}

@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Text Source Debugger</title>
+    <style>
+        :root {
+            --bg: #1e1e2e;
+            --surface: #313244;
+            --text: #cdd6f4;
+            --accent: #89b4fa;
+            --green: #a6e3a1;
+            --yellow: #f9e2af;
+        }
+
+        body {
+            background: var(--bg);
+            color: var(--text);
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            margin: 0;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        .container {
+            background: var(--surface);
+            padding: 30px;
+            border-radius: 15px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+            border: 1px solid rgba(255,255,255,0.1);
+            width: 80vw;
+            max-width: 800px;
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+
+        #text-display {
+            background: #181825;
+            padding: 40px;
+            border-radius: 12px;
+            min-height: 150px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            text-align: center;
+            font-size: 32px;
+            font-weight: 700;
+            color: white;
+            border: 2px solid var(--accent);
+            word-break: break-word;
+            transition: all 0.3s ease;
+        }
+
+        .info {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 15px;
+            font-family: monospace;
+            background: rgba(0,0,0,0.2);
+            padding: 15px;
+            border-radius: 8px;
+        }
+
+        .label { color: var(--accent); margin-right: 8px; }
+        .value { color: var(--green); }
+        .topic-value { color: var(--yellow); }
+
+        .status {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            padding: 8px 15px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: bold;
+            background: rgba(255,255,255,0.05);
+            border: 1px solid rgba(255,255,255,0.1);
+        }
+
+        .history {
+            max-height: 150px;
+            overflow-y: auto;
+            background: rgba(0,0,0,0.2);
+            padding: 10px;
+            border-radius: 8px;
+            font-size: 13px;
+            display: flex;
+            flex-direction: column-reverse;
+            gap: 5px;
+        }
+
+        .history-item {
+            padding: 4px 8px;
+            border-bottom: 1px solid rgba(255,255,255,0.05);
+            color: var(--text);
+            opacity: 0.7;
+        }
+    </style>
+</head>
+<body>
+    <div id="status" class="status">Connecting...</div>
+
+    <div class="container">
+        <h2 style="margin:0; color: var(--accent); text-align: center;">Text Source Debugger</h2>
+        
+        <div id="text-display">Waiting for text...</div>
+        
+        <div class="info">
+            <div><span class="label">Topic:</span> <span id="topic-val" class="topic-value">-</span></div>
+            <div><span class="label">Last Change:</span> <span id="time-val" class="value">-</span></div>
+            <div><span class="label">Port:</span> <span id="port-val" class="value">-</span></div>
+            <div><span class="label">Length:</span> <span id="len-val" class="value">0 chars</span></div>
+        </div>
+
+        <div class="history" id="history">
+            <!-- Recent changes will appear here -->
+        </div>
+    </div>
+
+    <script>
+        const textDisplay = document.getElementById('text-display');
+        const topicVal = document.getElementById('topic-val');
+        const timeVal = document.getElementById('time-val');
+        const portVal = document.getElementById('port-val');
+        const lenVal = document.getElementById('len-val');
+        const status = document.getElementById('status');
+        const history = document.getElementById('history');
+
+        function addHistory(text) {
+            const item = document.createElement('div');
+            item.className = 'history-item';
+            const now = new Date().toLocaleTimeString();
+            item.textContent = `[${now}] ${text}`;
+            history.appendChild(item);
+            if (history.children.length > 10) {
+                history.removeChild(history.firstChild);
+            }
+        }
+
+        async function connect() {
+            const ports = [4466, 4477, 12348, 8089];
+            let wsPort = null;
+
+            for (const port of ports) {
+                try {
+                    const res = await fetch(`http://127.0.0.1:${port}/__lws/ws_port`);
+                    if (res.ok) {
+                        wsPort = (await res.text()).trim();
+                        break;
+                    }
+                } catch (e) {}
+            }
+
+            if (wsPort) {
+                const ws = new WebSocket(`ws://127.0.0.1:${wsPort}/ws`);
+                ws.onopen = () => {
+                    status.textContent = "CONNECTED";
+                    status.style.color = "#a6e3a1";
+                    portVal.textContent = wsPort;
+                };
+                ws.onmessage = (e) => {
+                    const data = JSON.parse(e.data);
+                    if (data.t === 'text') {
+                        const text = data.v;
+                        textDisplay.textContent = text || "(Empty)";
+                        topicVal.textContent = data.a || "default";
+                        timeVal.textContent = new Date().toLocaleTimeString();
+                        lenVal.textContent = `${text.length} chars`;
+                        
+                        // Brief flash effect
+                        textDisplay.style.borderColor = "#a6e3a1";
+                        setTimeout(() => {
+                            textDisplay.style.borderColor = "var(--accent)";
+                        }, 200);
+
+                        addHistory(text);
+                    }
+                };
+                ws.onclose = () => {
+                    status.textContent = "DISCONNECTED";
+                    status.style.color = "#f38ba8";
+                    setTimeout(connect, 2000);
+                };
+            } else {
+                status.textContent = "SEARCHING...";
+                setTimeout(connect, 2000);
+            }
+        }
+
+        connect();
+    </script>
+</body>
+</html>
