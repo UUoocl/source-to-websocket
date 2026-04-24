@@ -141,54 +141,53 @@
             }
         }
 
+        const params = new URLSearchParams(window.location.search);
+        const targetTopic = params.get('topic') || 'text_source';
+        topicVal.textContent = targetTopic;
+
         async function connect() {
-            const ports = [4466, 4477, 12348, 8089];
-            let wsPort = null;
+            const port = window.location.port || '4466';
+            const wsUrl = `ws://127.0.0.1:${port}/ws/${targetTopic}`;
+            
+            console.log(`Connecting to ${wsUrl}...`);
+            const ws = new WebSocket(wsUrl);
 
-            for (const port of ports) {
+            ws.onopen = () => {
+                status.textContent = "CONNECTED";
+                status.style.color = "#a6e3a1";
+                portVal.textContent = port;
+            };
+
+            ws.onmessage = (e) => {
                 try {
-                    const res = await fetch(`http://127.0.0.1:${port}/__lws/ws_port`);
-                    if (res.ok) {
-                        wsPort = (await res.text()).trim();
-                        break;
-                    }
-                } catch (e) {}
-            }
-
-            if (wsPort) {
-                const ws = new WebSocket(`ws://127.0.0.1:${wsPort}/ws`);
-                ws.onopen = () => {
-                    status.textContent = "CONNECTED";
-                    status.style.color = "#a6e3a1";
-                    portVal.textContent = wsPort;
-                };
-                ws.onmessage = (e) => {
                     const data = JSON.parse(e.data);
-                    if (data.t === 'text') {
-                        const text = data.v;
-                        textDisplay.textContent = text || "(Empty)";
-                        topicVal.textContent = data.a || "default";
-                        timeVal.textContent = new Date().toLocaleTimeString();
-                        lenVal.textContent = `${text.length} chars`;
-                        
-                        // Brief flash effect
-                        textDisplay.style.borderColor = "#a6e3a1";
-                        setTimeout(() => {
-                            textDisplay.style.borderColor = "var(--accent)";
-                        }, 200);
+                    const text = data.v || "";
+                    textDisplay.textContent = text || "(Empty)";
+                    topicVal.textContent = data.t || targetTopic;
+                    timeVal.textContent = new Date().toLocaleTimeString();
+                    lenVal.textContent = `${text.length} chars`;
+                    
+                    // Brief flash effect
+                    textDisplay.style.borderColor = "#a6e3a1";
+                    setTimeout(() => {
+                        textDisplay.style.borderColor = "var(--accent)";
+                    }, 200);
 
-                        addHistory(text);
-                    }
-                };
-                ws.onclose = () => {
-                    status.textContent = "DISCONNECTED";
-                    status.style.color = "#f38ba8";
-                    setTimeout(connect, 2000);
-                };
-            } else {
-                status.textContent = "SEARCHING...";
+                    addHistory(text);
+                } catch (err) {
+                    console.error("Failed to parse message:", err);
+                }
+            };
+
+            ws.onclose = () => {
+                status.textContent = "DISCONNECTED";
+                status.style.color = "#f38ba8";
                 setTimeout(connect, 2000);
-            }
+            };
+
+            ws.onerror = (err) => {
+                console.error("Socket error:", err);
+            };
         }
 
         connect();

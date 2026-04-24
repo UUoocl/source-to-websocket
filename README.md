@@ -4,10 +4,10 @@ A high-performance OBS plugin designed to bridge media content and metadata from
 
 ## Features
 
-- **Frame to WebSocket Filter**: Captures video frames from any source, scales them, compresses them to JPEG, and transmits them as Base64-encoded strings via WebSockets.
-- **Text to WebSocket Filter**: Monitors OBS text sources (GDI+, FreeType 2) and transmits content changes in real-time.
-- **Configurable Signal Pipeline**: Uses the `media_warp_transmit` signal to broadcast data through a local Mongoose web server.
-- **Built-in Debuggers**: Includes HTML test pages for verifying frame and text transmission.
+- **Frame to WebSocket Filter**: Captures video frames from any source, scales them, compresses them to JPEG, and transmits them as **Base64-encoded strings** to dedicated topics (e.g., `frame/my_source`).
+- **Text to WebSocket Filter**: Monitors OBS text sources and transmits changes to custom topics.
+- **Topic-Based Routing**: Uses the `media_warp_transmit_topic` signal to route data through the local bridge, ensuring low-latency delivery to specific overlay subscribers.
+- **Built-in Debuggers**: Updated HTML test pages (`frame_test.html`) that use the **Unified Port Architecture**.
 
 ## Installation
 

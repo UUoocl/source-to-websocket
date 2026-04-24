@@ -91,48 +91,50 @@
 
         let lastTime = performance.now();
 
+        const params = new URLSearchParams(window.location.search);
+        const targetTopic = params.get('topic') || 'frame_source';
+        typeVal.textContent = targetTopic;
+
         async function connect() {
-            const ports = [4466, 4477, 12348, 8089];
-            let wsPort = null;
+            const port = window.location.port || '4466';
+            const wsUrl = `ws://127.0.0.1:${port}/ws/${targetTopic}`;
+            
+            console.log(`Connecting to ${wsUrl}...`);
+            const ws = new WebSocket(wsUrl);
+            ws.binaryType = 'blob';
 
-            for (const port of ports) {
-                try {
-                    const res = await fetch(`http://127.0.0.1:${port}/__lws/ws_port`);
-                    if (res.ok) {
-                        wsPort = (await res.text()).trim();
-                        break;
+            ws.onopen = () => {
+                status.textContent = "CONNECTED";
+                status.style.color = "#a6e3a1";
+                portVal.textContent = port;
+            };
+
+            ws.onmessage = (e) => {
+                const now = performance.now();
+                latVal.textContent = `${Math.round(now - lastTime)} ms`;
+                lastTime = now;
+
+                if (e.data instanceof Blob) {
+                    sizeVal.textContent = `${Math.round(e.data.size / 1024)} KB`;
+                    if (img.src && img.src.startsWith('blob:')) {
+                        URL.revokeObjectURL(img.src);
                     }
-                } catch (e) {}
-            }
+                    img.src = URL.createObjectURL(e.data);
+                } else if (typeof e.data === 'string') {
+                    sizeVal.textContent = `${Math.round(e.data.length / 1024)} KB`;
+                    img.src = `data:image/jpeg;base64,${e.data}`;
+                }
+            };
 
-            if (wsPort) {
-                const ws = new WebSocket(`ws://127.0.0.1:${wsPort}/ws`);
-                ws.onopen = () => {
-                    status.textContent = "CONNECTED";
-                    status.style.color = "#a6e3a1";
-                    portVal.textContent = wsPort;
-                };
-                ws.onmessage = (e) => {
-                    const data = JSON.parse(e.data);
-                    if (data.t === 'frame') {
-                        const now = performance.now();
-                        latVal.textContent = `${Math.round(now - lastTime)} ms`;
-                        lastTime = now;
-
-                        typeVal.textContent = data.type;
-                        sizeVal.textContent = `${Math.round(data.v.length / 1024)} KB`;
-                        img.src = "data:image/jpeg;base64," + data.v;
-                    }
-                };
-                ws.onclose = () => {
-                    status.textContent = "DISCONNECTED";
-                    status.style.color = "#f38ba8";
-                    setTimeout(connect, 2000);
-                };
-            } else {
-                status.textContent = "SEARCHING...";
+            ws.onclose = () => {
+                status.textContent = "DISCONNECTED";
+                status.style.color = "#f38ba8";
                 setTimeout(connect, 2000);
-            }
+            };
+
+            ws.onerror = (err) => {
+                console.error("Socket error:", err);
+            };
         }
 
         connect();

@@ -180,24 +180,19 @@ static void transmit_frame(const char* type, struct obs_source_frame *frame, int
     }
 
     if (jpegBuf && jpegSize > 0) {
-        std::string b64 = base64_encode(jpegBuf, jpegSize);
-        obs_data_t *packet = obs_data_create();
-        obs_data_set_string(packet, "t", "frame");
-        obs_data_set_string(packet, "type", type);
-        obs_data_set_string(packet, "v", b64.c_str());
-        obs_data_set_string(packet, "a", type); // Use type as topic for frames
+        std::string b64 = base64_encode((const unsigned char*)jpegBuf, jpegSize);
         
         calldata_t cd;
         calldata_init(&cd);
-        calldata_set_ptr(&cd, "packet", packet);
-        
+        calldata_set_string(&cd, "data", b64.c_str());
+        calldata_set_string(&cd, "topic", type);
+
         signal_handler_t *sh = obs_get_signal_handler();
         if (sh) {
-            signal_handler_signal(sh, "media_warp_transmit", &cd);
+            signal_handler_signal(sh, "media_warp_transmit_topic", &cd);
         }
-        
         calldata_free(&cd);
-        obs_data_release(packet);
+
         tjFree(jpegBuf);
     }
 }
@@ -309,7 +304,7 @@ static void text_to_websocket_tick(void *data, float seconds) {
         state->last_text = current_text;
         
         obs_data_t *packet = obs_data_create();
-        obs_data_set_string(packet, "t", "text");
+        obs_data_set_string(packet, "t", state->topic.c_str());
         obs_data_set_string(packet, "v", current_text.c_str());
         obs_data_set_string(packet, "a", state->topic.c_str());
         
