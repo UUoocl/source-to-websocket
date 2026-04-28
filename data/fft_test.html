@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Audio FFT Debugger</title>
+    <style>
+        :root {
+            --bg: #1e1e2e;
+            --surface: #313244;
+            --text: #cdd6f4;
+            --accent: #cba6f7;
+            --green: #a6e3a1;
+        }
+
+        body {
+            background: var(--bg);
+            color: var(--text);
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            margin: 0;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        .container {
+            background: var(--surface);
+            padding: 20px;
+            border-radius: 15px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+            border: 1px solid rgba(255,255,255,0.1);
+            max-width: 90vw;
+        }
+
+        #fft-canvas {
+            width: 800px;
+            height: 300px;
+            background: #000;
+            border-radius: 8px;
+            display: block;
+            border: 2px solid var(--accent);
+        }
+
+        .info {
+            margin-top: 20px;
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+            font-family: monospace;
+        }
+
+        .label { color: var(--accent); }
+        .value { color: var(--green); }
+
+        .status {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            padding: 8px 15px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: bold;
+            background: rgba(255,255,255,0.05);
+        }
+    </style>
+</head>
+<body>
+    <div id="status" class="status">Connecting...</div>
+
+    <div class="container">
+        <h2 style="margin-top:0; color: var(--accent);">Audio FFT Spectrum Analyzer</h2>
+        <canvas id="fft-canvas" width="800" height="300"></canvas>
+        
+        <div class="info">
+            <div><span class="label">Topic:</span> <span id="topic-val" class="value">-</span></div>
+            <div><span class="label">Bands:</span> <span id="bands-val" class="value">0</span></div>
+            <div><span class="label">Update Rate:</span> <span id="lat-val" class="value">0 ms</span></div>
+            <div><span class="label">WS Port:</span> <span id="port-val" class="value">-</span></div>
+        </div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('fft-canvas');
+        const ctx = canvas.getContext('2d');
+        const topicVal = document.getElementById('topic-val');
+        const bandsVal = document.getElementById('bands-val');
+        const latVal = document.getElementById('lat-val');
+        const portVal = document.getElementById('port-val');
+        const status = document.getElementById('status');
+
+        let lastTime = performance.now();
+
+        const params = new URLSearchParams(window.location.search);
+        const targetTopic = params.get('topic') || 'audio_fft';
+        topicVal.textContent = targetTopic;
+
+        // Base64 to Uint8Array fast decode
+        function base64ToUint8Array(base64) {
+            const raw = window.atob(base64);
+            const rawLength = raw.length;
+            const array = new Uint8Array(new ArrayBuffer(rawLength));
+            for(let i = 0; i < rawLength; i++) {
+                array[i] = raw.charCodeAt(i);
+            }
+            return array;
+        }
+
+        function drawFFT(dataArray) {
+            const width = canvas.width;
+            const height = canvas.height;
+            const bufferLength = dataArray.length;
+            
+            ctx.fillStyle = '#000';
+            ctx.fillRect(0, 0, width, height);
+
+            const barWidth = (width / bufferLength) * 0.8;
+            const spacing = (width / bufferLength) * 0.2;
+            let x = 0;
+
+            for(let i = 0; i < bufferLength; i++) {
+                // Map 0-255 to canvas height
+                const barHeight = (dataArray[i] / 255.0) * height;
+
+                // Color gradient based on frequency (x position) and amplitude (y position)
+                const hue = i / bufferLength * 360;
+                const lightness = 30 + (dataArray[i] / 255.0) * 40; // 30% to 70%
+                ctx.fillStyle = `hsl(${hue}, 80%, ${lightness}%)`;
+
+                ctx.fillRect(x, height - barHeight, barWidth, barHeight);
+
+                x += barWidth + spacing;
+            }
+        }
+
+        async function connect() {
+            const port = window.location.port || '4466';
+            const wsUrl = `ws://127.0.0.1:${port}/ws/${targetTopic}`;
+            
+            console.log(`Connecting to ${wsUrl}...`);
+            const ws = new WebSocket(wsUrl);
+
+            ws.onopen = () => {
+                status.textContent = "CONNECTED";
+                status.style.color = "#a6e3a1";
+                portVal.textContent = port;
+            };
+
+            ws.onmessage = (e) => {
+                const now = performance.now();
+                latVal.textContent = `${Math.round(now - lastTime)} ms`;
+                lastTime = now;
+
+                if (typeof e.data === 'string') {
+                    // Try to parse JSON if wrapped (unlikely if using transmit_topic, but just in case)
+                    let b64str = e.data;
+                    try {
+                        const parsed = JSON.parse(e.data);
+                        if (parsed.v) b64str = parsed.v;
+                    } catch(err) {
+                        // It's raw base64
+                    }
+
+                    const uint8Array = base64ToUint8Array(b64str);
+                    bandsVal.textContent = uint8Array.length;
+                    drawFFT(uint8Array);
+                }
+            };
+
+            ws.onclose = () => {
+                status.textContent = "DISCONNECTED";
+                status.style.color = "#f38ba8";
+                setTimeout(connect, 2000);
+            };
+
+            ws.onerror = (err) => {
+                console.error("Socket error:", err);
+            };
+        }
+
+        connect();
+        
+        // Initial empty draw
+        drawFFT(new Uint8Array(32));
+    </script>
+</body>
+</html>

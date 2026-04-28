@@ -4,6 +4,8 @@
 #include <atomic>
 #include <string>
 #include <mutex>
+#include <math.h>
+#include <algorithm>
 
 #include <util/platform.h>
 #include <turbojpeg.h>
@@ -340,6 +342,205 @@ static void text_to_websocket_defaults(obs_data_t *settings) {
     obs_data_set_default_string(settings, "topic", "text_source");
 }
 
+// --- Audio FFT to WebSocket Filter ---
+
+struct AudioFFTState {
+    std::string topic = "audio_fft";
+    std::atomic<int> fps{30};
+    std::atomic<int> num_bands{32};
+    std::atomic<float> smoothing{0.5f};
+    std::atomic<float> min_db{-60.0f};
+    std::atomic<float> max_db{0.0f};
+
+    uint64_t last_frame_time = 0;
+    
+    // vDSP / FFT state
+    int log2n = 11; // 2048 samples
+    int window_size = 2048;
+#ifdef __APPLE__
+    FFTSetup fft_setup = nullptr;
+#endif
+    
+    std::vector<float> sample_buffer;
+    std::vector<float> window;
+    
+    std::vector<float> smoothed_bands;
+    
+    std::mutex audio_mutex;
+
+    AudioFFTState() {
+#ifdef __APPLE__
+        fft_setup = vDSP_create_fftsetup(log2n, FFT_RADIX2);
+        window.resize(window_size);
+        vDSP_hann_window(window.data(), window_size, vDSP_HANN_NORM);
+#endif
+    }
+    
+    ~AudioFFTState() {
+#ifdef __APPLE__
+        if (fft_setup) {
+            vDSP_destroy_fftsetup(fft_setup);
+        }
+#endif
+    }
+};
+
+static void audio_fft_to_websocket_update(void *data, obs_data_t *settings) {
+    AudioFFTState *state = (AudioFFTState *)data;
+    std::lock_guard<std::mutex> lock(state->audio_mutex);
+    state->topic = obs_data_get_string(settings, "topic");
+    state->fps = (int)obs_data_get_int(settings, "fps");
+    
+    int new_bands = (int)obs_data_get_int(settings, "num_bands");
+    if (new_bands != state->num_bands) {
+        state->num_bands = new_bands;
+        state->smoothed_bands.clear();
+        state->smoothed_bands.resize(new_bands, state->min_db);
+    }
+    
+    state->smoothing = (float)obs_data_get_double(settings, "smoothing");
+    state->min_db = (float)obs_data_get_double(settings, "min_db");
+    state->max_db = (float)obs_data_get_double(settings, "max_db");
+}
+
+static void *audio_fft_to_websocket_create(obs_data_t *settings, obs_source_t *source) {
+    (void)source;
+    AudioFFTState *state = new AudioFFTState();
+    audio_fft_to_websocket_update(state, settings);
+    return state;
+}
+
+static void audio_fft_to_websocket_destroy(void *data) {
+    delete (AudioFFTState *)data;
+}
+
+static struct obs_audio_data *audio_fft_to_websocket_audio(void *data, struct obs_audio_data *audio) {
+    AudioFFTState *state = (AudioFFTState *)data;
+    
+#ifdef __APPLE__
+    uint64_t now = os_gettime_ns();
+    int current_fps = state->fps.load(std::memory_order_relaxed);
+    if (current_fps <= 0) current_fps = 30;
+    uint64_t interval = 1000000000ULL / current_fps;
+
+    std::lock_guard<std::mutex> lock(state->audio_mutex);
+
+    uint32_t frames = audio->frames;
+    float* src = (float*)audio->data[0]; // Channel 0
+    if (!src) return audio;
+
+    // Append to buffer
+    for (uint32_t i = 0; i < frames; ++i) {
+        state->sample_buffer.push_back(src[i]);
+    }
+
+    if (now - state->last_frame_time >= interval && state->sample_buffer.size() >= state->window_size) {
+        state->last_frame_time = now;
+        
+        int start_idx = state->sample_buffer.size() - state->window_size;
+        
+        int half_size = state->window_size / 2;
+        std::vector<float> real(half_size, 0.0f);
+        std::vector<float> imag(half_size, 0.0f);
+        DSPSplitComplex splitComplex = { real.data(), imag.data() };
+        
+        std::vector<float> windowed(state->window_size, 0.0f);
+        vDSP_vmul(state->sample_buffer.data() + start_idx, 1, state->window.data(), 1, windowed.data(), 1, state->window_size);
+        vDSP_ctoz((DSPComplex*)windowed.data(), 2, &splitComplex, 1, half_size);
+        
+        vDSP_fft_zrip(state->fft_setup, &splitComplex, 1, state->log2n, FFT_FORWARD);
+        
+        std::vector<float> magnitudes(half_size, 0.0f);
+        vDSP_zvabs(&splitComplex, 1, magnitudes.data(), 1, half_size);
+        
+        float scale = 1.0f / (2.0f * state->window_size);
+        vDSP_vsmul(magnitudes.data(), 1, &scale, magnitudes.data(), 1, half_size);
+        
+        float ref = 1.0f;
+        std::vector<float> db(half_size, 0.0f);
+        vDSP_vdbcon(magnitudes.data(), 1, &ref, db.data(), 1, half_size, 1);
+        
+        int num_bands = state->num_bands.load();
+        float smoothing = state->smoothing.load();
+        float min_db = state->min_db.load();
+        float max_db = state->max_db.load();
+        
+        if (state->smoothed_bands.size() != num_bands) {
+            state->smoothed_bands.resize(num_bands, min_db);
+        }
+        
+        std::vector<uint8_t> payload(num_bands, 0);
+        
+        int usable_bins = half_size / 2; 
+        float bins_per_band = (float)usable_bins / num_bands;
+        
+        for (int i = 0; i < num_bands; ++i) {
+            int start_bin = 1 + (int)(i * bins_per_band);
+            int end_bin = 1 + (int)((i + 1) * bins_per_band);
+            if (end_bin > half_size) end_bin = half_size;
+            
+            float max_val = -1000.0f;
+            for (int j = start_bin; j < end_bin; ++j) {
+                if (db[j] > max_val) max_val = db[j];
+            }
+            
+            float current = state->smoothed_bands[i];
+            float smoothed = current * smoothing + max_val * (1.0f - smoothing);
+            state->smoothed_bands[i] = smoothed;
+            
+            float normalized = (smoothed - min_db) / (max_db - min_db);
+            normalized = std::clamp(normalized, 0.0f, 1.0f);
+            payload[i] = (uint8_t)(normalized * 255.0f);
+        }
+        
+        std::string b64 = base64_encode(payload.data(), payload.size());
+        
+        calldata_t cd;
+        calldata_init(&cd);
+        calldata_set_string(&cd, "data", b64.c_str());
+        calldata_set_string(&cd, "topic", state->topic.c_str());
+
+        signal_handler_t *sh = obs_get_signal_handler();
+        if (sh) {
+            signal_handler_signal(sh, "media_warp_transmit_topic", &cd);
+        }
+        calldata_free(&cd);
+        
+        state->sample_buffer.clear();
+    } else if (state->sample_buffer.size() > state->window_size * 2) {
+        int drop = state->sample_buffer.size() - state->window_size;
+        state->sample_buffer.erase(state->sample_buffer.begin(), state->sample_buffer.begin() + drop);
+    }
+#endif
+    return audio;
+}
+
+static const char *audio_fft_to_websocket_get_name(void *unused) {
+    (void)unused;
+    return "audio fft to websocket";
+}
+
+static obs_properties_t *audio_fft_to_websocket_properties(void *data) {
+    (void)data;
+    obs_properties_t *props = obs_properties_create();
+    obs_properties_add_text(props, "topic", "WebSocket Topic", OBS_TEXT_DEFAULT);
+    obs_properties_add_int(props, "fps", "Target FPS", 1, 120, 1);
+    obs_properties_add_int(props, "num_bands", "Number of Bands", 4, 256, 4);
+    obs_properties_add_float_slider(props, "smoothing", "Smoothing Factor", 0.0, 0.99, 0.01);
+    obs_properties_add_float(props, "min_db", "Min dB (Floor)", -120.0, 0.0, 1.0);
+    obs_properties_add_float(props, "max_db", "Max dB (Ceiling)", -60.0, 20.0, 1.0);
+    return props;
+}
+
+static void audio_fft_to_websocket_defaults(obs_data_t *settings) {
+    obs_data_set_default_string(settings, "topic", "audio_fft");
+    obs_data_set_default_int(settings, "fps", 30);
+    obs_data_set_default_int(settings, "num_bands", 32);
+    obs_data_set_default_double(settings, "smoothing", 0.5);
+    obs_data_set_default_double(settings, "min_db", -60.0);
+    obs_data_set_default_double(settings, "max_db", 0.0);
+}
+
 bool obs_module_load(void) {
     // Register Frame filter
     obs_source_info frame_info = {};
@@ -370,6 +571,21 @@ bool obs_module_load(void) {
     text_info.video_tick = text_to_websocket_tick;
 
     obs_register_source(&text_info);
+    
+    // Register Audio FFT filter
+    obs_source_info fft_info = {};
+    fft_info.id = "audio_fft_to_websocket";
+    fft_info.type = OBS_SOURCE_TYPE_FILTER;
+    fft_info.output_flags = OBS_SOURCE_AUDIO;
+    fft_info.get_name = audio_fft_to_websocket_get_name;
+    fft_info.create = audio_fft_to_websocket_create;
+    fft_info.destroy = audio_fft_to_websocket_destroy;
+    fft_info.update = audio_fft_to_websocket_update;
+    fft_info.get_properties = audio_fft_to_websocket_properties;
+    fft_info.get_defaults = audio_fft_to_websocket_defaults;
+    fft_info.filter_audio = audio_fft_to_websocket_audio;
+
+    obs_register_source(&fft_info);
     
     blog(LOG_INFO, "[Source to WebSocket] Filters registered");
     return true;
