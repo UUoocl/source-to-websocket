@@ -434,7 +434,7 @@ static struct obs_audio_data *audio_fft_to_websocket_audio(void *data, struct ob
         state->sample_buffer.push_back(src[i]);
     }
 
-    if (now - state->last_frame_time >= interval && state->sample_buffer.size() >= state->window_size) {
+    if (now - state->last_frame_time >= interval && state->sample_buffer.size() >= (size_t)state->window_size) {
         state->last_frame_time = now;
         
         int start_idx = state->sample_buffer.size() - state->window_size;
@@ -465,7 +465,7 @@ static struct obs_audio_data *audio_fft_to_websocket_audio(void *data, struct ob
         float min_db = state->min_db.load();
         float max_db = state->max_db.load();
         
-        if (state->smoothed_bands.size() != num_bands) {
+        if (state->smoothed_bands.size() != (size_t)num_bands) {
             state->smoothed_bands.resize(num_bands, min_db);
         }
         
@@ -507,7 +507,7 @@ static struct obs_audio_data *audio_fft_to_websocket_audio(void *data, struct ob
         calldata_free(&cd);
         
         state->sample_buffer.clear();
-    } else if (state->sample_buffer.size() > state->window_size * 2) {
+    } else if (state->sample_buffer.size() > (size_t)(state->window_size * 2)) {
         int drop = state->sample_buffer.size() - state->window_size;
         state->sample_buffer.erase(state->sample_buffer.begin(), state->sample_buffer.begin() + drop);
     }
